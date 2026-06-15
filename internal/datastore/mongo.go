@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
-	"strings"
+	"regexp"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -76,16 +76,19 @@ func (d *Datastore) Put(ctx context.Context, id string, data bson.M) error {
 	return err
 }
 
-func (d *Datastore) Delete(ctx context.Context, id string) error {
-	_, err := d.collection.DeleteOne(ctx, bson.M{"_id": id})
-	return err
+func (d *Datastore) Delete(ctx context.Context, id string) (bool, error) {
+	res, err := d.collection.DeleteOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return false, err
+	}
+	return res.DeletedCount > 0, nil
 }
 
 func (d *Datastore) List(ctx context.Context, prefix string) ([]bson.M, error) {
 	// Query resources where ID starts with prefix
 	filter := bson.M{
 		"_id": bson.M{
-			"$regex": "^" + strings.ReplaceAll(prefix, "/", "\\/"),
+			"$regex": "^" + regexp.QuoteMeta(prefix),
 		},
 	}
 	cursor, err := d.collection.Find(ctx, filter)
