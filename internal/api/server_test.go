@@ -29,7 +29,7 @@ func TestUDRServerFlow(t *testing.T) {
 		return
 	}
 	defer func() {
-		_ = db.Delete(context.Background(), "/nudr-dr/v1/subscription-data/imsi-test/authentication-data/authentication-subscription")
+		_, _ = db.Delete(context.Background(), "/nudr-dr/v1/subscription-data/imsi-test/context-data/ip-sm-gw")
 		_ = db.Close(context.Background())
 	}()
 
@@ -43,7 +43,7 @@ func TestUDRServerFlow(t *testing.T) {
 	defer ts.Close()
 
 	client := ts.Client()
-	authPath := "/nudr-dr/v1/subscription-data/imsi-test/authentication-data/authentication-subscription"
+	authPath := "/nudr-dr/v1/subscription-data/imsi-test/context-data/ip-sm-gw"
 
 	// 1. GET - Should return 404 originally
 	resp, err := client.Get(ts.URL + authPath)
@@ -56,8 +56,8 @@ func TestUDRServerFlow(t *testing.T) {
 
 	// 2. PUT - Create the resource
 	authData := bson.M{
-		"authenticationMethod": "5G_AKA",
-		"sequenceNumber":       "000000000001",
+		"ipSmGwIpAddress": "192.168.1.1",
+		"ipSmGwSvcUri":    "sip:ipsmgw@example.com",
 	}
 	bodyBytes, _ := json.Marshal(authData)
 	req, _ := http.NewRequest(http.MethodPut, ts.URL+authPath, bytes.NewBuffer(bodyBytes))
@@ -85,13 +85,13 @@ func TestUDRServerFlow(t *testing.T) {
 	if err := json.Unmarshal(body, &getResult); err != nil {
 		t.Fatalf("Failed to decode GET response: %v", err)
 	}
-	if getResult["authenticationMethod"] != "5G_AKA" || getResult["sequenceNumber"] != "000000000001" {
+	if getResult["ipSmGwIpAddress"] != "192.168.1.1" || getResult["ipSmGwSvcUri"] != "sip:ipsmgw@example.com" {
 		t.Errorf("Unexpected payload returned: %+v", getResult)
 	}
 
 	// 4. PATCH - Partial update
 	patchData := bson.M{
-		"sequenceNumber": "000000000002",
+		"ipSmGwSvcUri": "sip:ipsmgw2@example.com",
 	}
 	patchBytes, _ := json.Marshal(patchData)
 	req, _ = http.NewRequest(http.MethodPatch, ts.URL+authPath, bytes.NewBuffer(patchBytes))
@@ -114,7 +114,7 @@ func TestUDRServerFlow(t *testing.T) {
 
 	var patchResult bson.M
 	json.Unmarshal(body, &patchResult)
-	if patchResult["authenticationMethod"] != "5G_AKA" || patchResult["sequenceNumber"] != "000000000002" {
+	if patchResult["ipSmGwIpAddress"] != "192.168.1.1" || patchResult["ipSmGwSvcUri"] != "sip:ipsmgw2@example.com" {
 		t.Errorf("Unexpected patched payload: %+v", patchResult)
 	}
 
