@@ -1,0 +1,11 @@
+# Binaries
+udr
+
+# OpenAPI Specs
+spec/
+
+# Nix / Direnv
+.direnv/
+.devenv/
+result
+result-*
