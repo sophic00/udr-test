@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"log"
-	"regexp"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+type contextKey string
+
+const DbNameKey contextKey = "dbName"
 
 type Resource struct {
 	ID        string    `bson:"_id"`
@@ -19,9 +23,8 @@ type Resource struct {
 }
 
 type Datastore struct {
-	client     *mongo.Client
-	db         *mongo.Database
-	collection *mongo.Collection
+	client        *mongo.Client
+	defaultDbName string
 }
 
 func NewDatastore(ctx context.Context, uri, dbName string) (*Datastore, error) {
@@ -36,15 +39,11 @@ func NewDatastore(ctx context.Context, uri, dbName string) (*Datastore, error) {
 		return nil, err
 	}
 
-	db := client.Database(dbName)
-	collection := db.Collection("resources")
-
-	log.Printf("Connected to MongoDB at %s, database %s", uri, dbName)
+	log.Printf("Connected to MongoDB at %s, default database: %s", uri, dbName)
 
 	return &Datastore{
-		client:     client,
-		db:         db,
-		collection: collection,
+		client:        client,
+		defaultDbName: dbName,
 	}, nil
 }
 
@@ -52,9 +51,17 @@ func (d *Datastore) Close(ctx context.Context) error {
 	return d.client.Disconnect(ctx)
 }
 
+func (d *Datastore) getCollection(ctx context.Context) *mongo.Collection {
+	dbName, ok := ctx.Value(DbNameKey).(string)
+	if !ok || dbName == "" {
+		dbName = d.defaultDbName
+	}
+	return d.client.Database(dbName).Collection("resources")
+}
+
 func (d *Datastore) Get(ctx context.Context, id string) (bson.M, error) {
 	var res Resource
-	err := d.collection.FindOne(ctx, bson.M{"_id": id}).Decode(&res)
+	err := d.getCollection(ctx).FindOne(ctx, bson.M{"_id": id}).Decode(&res)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, nil
@@ -72,26 +79,23 @@ func (d *Datastore) Put(ctx context.Context, id string, data bson.M) error {
 			"updatedAt": time.Now(),
 		},
 	}
-	_, err := d.collection.UpdateByID(ctx, id, update, opts)
+	_, err := d.getCollection(ctx).UpdateByID(ctx, id, update, opts)
 	return err
 }
 
-func (d *Datastore) Delete(ctx context.Context, id string) (bool, error) {
-	res, err := d.collection.DeleteOne(ctx, bson.M{"_id": id})
-	if err != nil {
-		return false, err
-	}
-	return res.DeletedCount > 0, nil
+func (d *Datastore) Delete(ctx context.Context, id string) error {
+	_, err := d.getCollection(ctx).DeleteOne(ctx, bson.M{"_id": id})
+	return err
 }
 
 func (d *Datastore) List(ctx context.Context, prefix string) ([]bson.M, error) {
 	// Query resources where ID starts with prefix
 	filter := bson.M{
 		"_id": bson.M{
-			"$regex": "^" + regexp.QuoteMeta(prefix),
+			"$regex": "^" + strings.ReplaceAll(prefix, "/", "\\/"),
 		},
 	}
-	cursor, err := d.collection.Find(ctx, filter)
+	cursor, err := d.getCollection(ctx).Find(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -107,4 +111,9 @@ func (d *Datastore) List(ctx context.Context, prefix string) ([]bson.M, error) {
 	}
 
 	return results, nil
+}
+
+func (d *Datastore) DropDatabase(ctx context.Context, dbName string) error {
+	log.Printf("Dropping database: %s", dbName)
+	return d.client.Database(dbName).Drop(ctx)
 }

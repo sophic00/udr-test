@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -46,17 +47,10 @@ func main() {
 	// Middlewares
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(databaseRoutingMiddleware)
 
 	// Register OpenAPI Handlers
-	// Since 3GPP APIs use /nudr-dr/v1 as base path, Chi router handles routing.
-	// But let's check if the generated paths include the base path /nudr-dr/v1.
-	// Yes! In 3GPP OpenAPI files, paths do not include the base path,
-	// but the oapi-codegen router matches whatever path is defined in the Swagger specification.
-	// In TS29504_Nudr_DR.yaml, the path templates start with /subscription-data/{ueId}...
-	// The basePath is /nudr-dr/v1.
-	// So we can mount the generated handler under /nudr-dr/v1 !
 	h := api.HandlerFromMux(server, chi.NewRouter())
-
 	r.Mount("/nudr-dr/v1", h)
 
 	// Add a root healthcheck
@@ -91,6 +85,24 @@ func main() {
 		log.Fatalf("HTTP server ListenAndServe error: %v", err)
 	}
 	log.Println("Server stopped.")
+}
+
+func databaseRoutingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dbName := ""
+		if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+			dbName = fmt.Sprintf("udr_session_%s", sessionID)
+		} else if customDB := r.Header.Get("X-UDR-Database"); customDB != "" {
+			dbName = customDB
+		}
+
+		if dbName != "" {
+			ctx := context.WithValue(r.Context(), datastore.DbNameKey, dbName)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		} else {
+			next.ServeHTTP(w, r)
+		}
+	})
 }
 
 func getEnv(key, defaultVal string) string {

@@ -29,13 +29,36 @@ func TestUDRServerFlow(t *testing.T) {
 		return
 	}
 	defer func() {
-		_, _ = db.Delete(context.Background(), "/nudr-dr/v1/subscription-data/imsi-test/context-data/ip-sm-gw")
+		// Clean up testing databases
+		_ = db.DropDatabase(context.Background(), "udr_test")
+		_ = db.DropDatabase(context.Background(), "udr_session_sessionA")
+		_ = db.DropDatabase(context.Background(), "udr_session_sessionB")
 		_ = db.Close(context.Background())
 	}()
 
 	// Setup Server and Router
 	server := api.NewServer(db)
 	r := chi.NewRouter()
+
+	// Apply databaseRoutingMiddleware (mimic main.go middleware setup)
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			dbName := ""
+			if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+				dbName = "udr_session_" + sessionID
+			} else if customDB := r.Header.Get("X-UDR-Database"); customDB != "" {
+				dbName = customDB
+			}
+
+			if dbName != "" {
+				ctx := context.WithValue(r.Context(), datastore.DbNameKey, dbName)
+				next.ServeHTTP(w, r.WithContext(ctx))
+			} else {
+				next.ServeHTTP(w, r)
+			}
+		})
+	})
+
 	h := api.HandlerFromMux(server, chi.NewRouter())
 	r.Mount("/nudr-dr/v1", h)
 
@@ -43,10 +66,13 @@ func TestUDRServerFlow(t *testing.T) {
 	defer ts.Close()
 
 	client := ts.Client()
-	authPath := "/nudr-dr/v1/subscription-data/imsi-test/context-data/ip-sm-gw"
+	// Use 5G VN Group path which supports GET, PUT, PATCH, and DELETE in 3GPP spec
+	testPath := "/nudr-dr/v1/subscription-data/group-data/5g-vn-groups/groupA"
 
-	// 1. GET - Should return 404 originally
-	resp, err := client.Get(ts.URL + authPath)
+	// 1. GET - Should return 404 originally (sessionA)
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}
@@ -54,14 +80,17 @@ func TestUDRServerFlow(t *testing.T) {
 		t.Errorf("Expected status 404, got %d", resp.StatusCode)
 	}
 
-	// 2. PUT - Create the resource
-	authData := bson.M{
-		"ipSmGwIpAddress": "192.168.1.1",
-		"ipSmGwSvcUri":    "sip:ipsmgw@example.com",
+	// 2. PUT - Create resource in sessionA
+	groupData := bson.M{
+		"vnGroupData": bson.M{
+			"routingIndicator": "1234",
+		},
+		"internalGroupId": "intGroupA",
 	}
-	bodyBytes, _ := json.Marshal(authData)
-	req, _ := http.NewRequest(http.MethodPut, ts.URL+authPath, bytes.NewBuffer(bodyBytes))
+	bodyBytes, _ := json.Marshal(groupData)
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+testPath, bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Session-ID", "sessionA")
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("PUT request failed: %v", err)
@@ -70,8 +99,10 @@ func TestUDRServerFlow(t *testing.T) {
 		t.Errorf("Expected status 204, got %d", resp.StatusCode)
 	}
 
-	// 3. GET - Verify the created resource
-	resp, err = client.Get(ts.URL + authPath)
+	// 3. GET (sessionA) - Verify the created resource is visible in sessionA
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}
@@ -85,17 +116,39 @@ func TestUDRServerFlow(t *testing.T) {
 	if err := json.Unmarshal(body, &getResult); err != nil {
 		t.Fatalf("Failed to decode GET response: %v", err)
 	}
-	if getResult["ipSmGwIpAddress"] != "192.168.1.1" || getResult["ipSmGwSvcUri"] != "sip:ipsmgw@example.com" {
+	if getResult["internalGroupId"] != "intGroupA" {
 		t.Errorf("Unexpected payload returned: %+v", getResult)
 	}
 
-	// 4. PATCH - Partial update
+	// 4. GET (sessionB) - Should return 404 (isolation check)
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "sessionB")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status 404 for sessionB, got %d", resp.StatusCode)
+	}
+
+	// 5. GET (No Session Header) - Should return 404 (isolation check)
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status 404 for default db, got %d", resp.StatusCode)
+	}
+
+	// 6. PATCH (sessionA) - Partial update
 	patchData := bson.M{
-		"ipSmGwSvcUri": "sip:ipsmgw2@example.com",
+		"internalGroupId": "intGroupAPatched",
 	}
 	patchBytes, _ := json.Marshal(patchData)
-	req, _ = http.NewRequest(http.MethodPatch, ts.URL+authPath, bytes.NewBuffer(patchBytes))
+	req, _ = http.NewRequest(http.MethodPatch, ts.URL+testPath, bytes.NewBuffer(patchBytes))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Session-ID", "sessionA")
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("PATCH request failed: %v", err)
@@ -104,8 +157,10 @@ func TestUDRServerFlow(t *testing.T) {
 		t.Errorf("Expected status 204, got %d", resp.StatusCode)
 	}
 
-	// 5. GET - Verify the patched resource
-	resp, err = client.Get(ts.URL + authPath)
+	// 7. GET (sessionA) - Verify the patched resource is updated
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}
@@ -114,12 +169,13 @@ func TestUDRServerFlow(t *testing.T) {
 
 	var patchResult bson.M
 	json.Unmarshal(body, &patchResult)
-	if patchResult["ipSmGwIpAddress"] != "192.168.1.1" || patchResult["ipSmGwSvcUri"] != "sip:ipsmgw2@example.com" {
+	if patchResult["internalGroupId"] != "intGroupAPatched" {
 		t.Errorf("Unexpected patched payload: %+v", patchResult)
 	}
 
-	// 6. DELETE - Remove the resource
-	req, _ = http.NewRequest(http.MethodDelete, ts.URL+authPath, nil)
+	// 8. DELETE (sessionA) - Remove the resource
+	req, _ = http.NewRequest(http.MethodDelete, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("DELETE request failed: %v", err)
@@ -128,8 +184,10 @@ func TestUDRServerFlow(t *testing.T) {
 		t.Errorf("Expected status 204, got %d", resp.StatusCode)
 	}
 
-	// 7. GET - Verify deleted resource returns 404
-	resp, err = client.Get(ts.URL + authPath)
+	// 9. GET (sessionA) - Verify deleted resource returns 404
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}

@@ -191,14 +191,10 @@ func (s *Server) handlePatch(ctx context.Context, w http.ResponseWriter, r *http
 }
 
 func (s *Server) handleDelete(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) {
-	deleted, err := s.db.Delete(ctx, path)
+	err := s.db.Delete(ctx, path)
 	if err != nil {
 		log.Printf("Error deleting path %s: %v", path, err)
 		s.writeProblemDetails(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
-		return
-	}
-	if !deleted {
-		s.writeProblemDetails(w, http.StatusNotFound, "Not Found", fmt.Sprintf("Resource not found at path: %s", path))
 		return
 	}
 
