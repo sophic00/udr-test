@@ -1,6 +1,6 @@
-.PHONY: all shell-deps clone-specs generate build run test clean docker-mongo-start docker-mongo-stop
+.PHONY: all shell-deps clone-specs generate build run test clean docker-mongo-start docker-mongo-stop build-mcp run-mcp
 
-all: clone-specs generate build
+all: clone-specs generate build build-mcp
 
 clone-specs:
 	@if [ ! -d "spec" ]; then \
@@ -23,16 +23,24 @@ build:
 	@echo "Building UDR test server..."
 	nix develop --command go build -o udr cmd/udr/main.go
 
+build-mcp:
+	@echo "Building MongoDB MCP server..."
+	nix develop --command go build -o mcp-mongo cmd/mcp-mongo/main.go
+
 run:
 	@echo "Running UDR test server..."
 	./udr
+
+run-mcp:
+	@echo "Running MongoDB MCP server..."
+	./mcp-mongo
 
 test:
 	@echo "Running verification tests..."
 	nix develop --command go test ./...
 
 clean:
-	rm -rf spec internal/api/udr.gen.go internal/api/stubs.gen.go udr
+	rm -rf spec internal/api/udr.gen.go internal/api/stubs.gen.go udr mcp-mongo
 
 docker-mongo-start:
 	docker run -d --name udr-mongo -p 27017:27017 mongodb/mongodb-community-server:latest

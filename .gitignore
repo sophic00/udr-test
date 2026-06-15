@@ -1,5 +1,6 @@
 # Binaries
 udr
+mcp-mongo
 
 # OpenAPI Specs
 spec/
