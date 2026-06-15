@@ -92,12 +92,12 @@ func (s *Server) handleGet(ctx context.Context, w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handlePut(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) {
+	defer r.Body.Close()
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.writeProblemDetails(w, http.StatusBadRequest, "Bad Request", "Failed to read request body")
 		return
 	}
-	defer r.Body.Close()
 
 	var data bson.M
 	if len(bodyBytes) > 0 {
@@ -120,12 +120,12 @@ func (s *Server) handlePut(ctx context.Context, w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handlePost(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) {
+	defer r.Body.Close()
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.writeProblemDetails(w, http.StatusBadRequest, "Bad Request", "Failed to read request body")
 		return
 	}
-	defer r.Body.Close()
 
 	var data bson.M
 	if len(bodyBytes) > 0 {
@@ -153,12 +153,12 @@ func (s *Server) handlePost(ctx context.Context, w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handlePatch(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) {
+	defer r.Body.Close()
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.writeProblemDetails(w, http.StatusBadRequest, "Bad Request", "Failed to read request body")
 		return
 	}
-	defer r.Body.Close()
 
 	var patch bson.M
 	if err := json.Unmarshal(bodyBytes, &patch); err != nil {
@@ -173,7 +173,8 @@ func (s *Server) handlePatch(ctx context.Context, w http.ResponseWriter, r *http
 		return
 	}
 	if existing == nil {
-		existing = bson.M{}
+		s.writeProblemDetails(w, http.StatusNotFound, "Not Found", fmt.Sprintf("Cannot patch non-existent resource: %s", path))
+		return
 	}
 
 	// Apply merge patch
@@ -190,10 +191,14 @@ func (s *Server) handlePatch(ctx context.Context, w http.ResponseWriter, r *http
 }
 
 func (s *Server) handleDelete(ctx context.Context, w http.ResponseWriter, r *http.Request, path string) {
-	err := s.db.Delete(ctx, path)
+	deleted, err := s.db.Delete(ctx, path)
 	if err != nil {
 		log.Printf("Error deleting path %s: %v", path, err)
 		s.writeProblemDetails(w, http.StatusInternalServerError, "Internal Server Error", err.Error())
+		return
+	}
+	if !deleted {
+		s.writeProblemDetails(w, http.StatusNotFound, "Not Found", fmt.Sprintf("Resource not found at path: %s", path))
 		return
 	}
 
