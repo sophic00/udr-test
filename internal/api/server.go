@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -211,19 +212,9 @@ func mergePatch(target, patch bson.M) bson.M {
 
 		// If value is a nested map, recurse
 		if targetVal, ok := target[k]; ok {
-			if targetMap, ok1 := targetVal.(bson.M); ok1 {
-				if patchMap, ok2 := v.(bson.M); ok2 {
+			if targetMap, ok1 := toMap(targetVal); ok1 {
+				if patchMap, ok2 := toMap(v); ok2 {
 					target[k] = mergePatch(targetMap, patchMap)
-					continue
-				}
-			} else if targetMap, ok1 := targetVal.(map[string]interface{}); ok1 {
-				// Convert to bson.M for recursion
-				convertedTarget := bson.M(targetMap)
-				if patchMap, ok2 := v.(map[string]interface{}); ok2 {
-					target[k] = mergePatch(convertedTarget, bson.M(patchMap))
-					continue
-				} else if patchMap, ok2 := v.(bson.M); ok2 {
-					target[k] = mergePatch(convertedTarget, patchMap)
 					continue
 				}
 			}
@@ -232,6 +223,18 @@ func mergePatch(target, patch bson.M) bson.M {
 	}
 	return target
 }
+
+// Helper to convert interface{} to bson.M if it is a map[string]interface{} or bson.M
+func toMap(v interface{}) (bson.M, bool) {
+	if m, ok := v.(bson.M); ok {
+		return m, true
+	}
+	if m, ok := v.(map[string]interface{}); ok {
+		return bson.M(m), true
+	}
+	return nil, false
+}
+
 
 func isListEndpoint(path string) bool {
 	// Identify common collection list endpoints
@@ -264,7 +267,11 @@ func (s *Server) writeJSON(w http.ResponseWriter, statusCode int, data interface
 }
 
 func (s *Server) writeProblemDetails(w http.ResponseWriter, status int, title, detail string) {
-	// Standard 3GPP ProblemDetails structure
+	WriteProblemDetails(w, status, title, detail)
+}
+
+// WriteProblemDetails writes a standard 3GPP ProblemDetails response to the writer.
+func WriteProblemDetails(w http.ResponseWriter, status int, title, detail string) {
 	problem := bson.M{
 		"status": status,
 		"title":  title,
@@ -276,3 +283,38 @@ func (s *Server) writeProblemDetails(w http.ResponseWriter, status int, title, d
 		log.Printf("Error encoding ProblemDetails response: %v", err)
 	}
 }
+
+var (
+	safeNameRegex  = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+	blacklistedDBs = map[string]bool{
+		"admin":  true,
+		"config": true,
+		"local":  true,
+	}
+)
+
+// ValidateDatabaseName checks if the database name is safe and not a system database.
+func ValidateDatabaseName(name string) error {
+	if name == "" {
+		return fmt.Errorf("database name cannot be empty")
+	}
+	if !safeNameRegex.MatchString(name) {
+		return fmt.Errorf("database name '%s' contains invalid characters or exceeds 64 characters", name)
+	}
+	if blacklistedDBs[strings.ToLower(name)] {
+		return fmt.Errorf("access to database '%s' is forbidden", name)
+	}
+	return nil
+}
+
+// ValidateSessionID checks if the session ID is safe.
+func ValidateSessionID(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session ID cannot be empty")
+	}
+	if !safeNameRegex.MatchString(sessionID) {
+		return fmt.Errorf("session ID '%s' contains invalid characters or exceeds 64 characters", sessionID)
+	}
+	return nil
+}
+
