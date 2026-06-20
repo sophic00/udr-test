@@ -66,7 +66,7 @@ func main() {
 
 	// Run server based on chosen transport
 	if transport == "sse" {
-		port := getEnv("PORT", "8081")
+		port := getEnv("MCP_PORT", "8081")
 		log.Printf("Running MCP SSE server on port %s (endpoint: /sse, messages: /messages)", port)
 		sseServer := server.NewSSEServer(s)
 		if err := sseServer.Start(":" + port); err != nil {
