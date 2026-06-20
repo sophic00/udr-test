@@ -27,10 +27,24 @@ For details on building, running, verifying, and cleaning up the mock server, pl
 
 ## Configuration
 
-You can override defaults using environment variables:
+Both the UDR Mock Server and the MongoDB MCP Server can be configured using environment variables. You can customize them in your local environment, via a `.env` file, or inside docker containers.
 
-| Environment Variable | Default Value               | Description                  |
-| :------------------- | :-------------------------- | :--------------------------- |
-| `MONGODB_URI`        | `mongodb://localhost:27017` | MongoDB connection string    |
-| `MONGODB_DB`         | `udr`                       | Name of the database         |
-| `PORT`               | `8080`                      | Port for the UDR HTTP server |
+### Common Configuration
+
+| Environment Variable | Default Value               | Description                                                      |
+| :------------------- | :-------------------------- | :--------------------------------------------------------------- |
+| `MONGODB_URI`        | `mongodb://localhost:27017` | MongoDB connection URI string                                   |
+| `MONGODB_DB`         | `udr`                       | Default MongoDB database name                                    |
+
+### UDR Mock Server Configuration
+
+| Environment Variable | Default Value               | Description                                                      |
+| :------------------- | :-------------------------- | :--------------------------------------------------------------- |
+| `PORT`               | `8080`                      | Port for the UDR HTTP server                                     |
+
+### MCP MongoDB Server Configuration
+
+| Environment Variable | Default Value               | Description                                                      |
+| :------------------- | :-------------------------- | :--------------------------------------------------------------- |
+| `MCP_TRANSPORT`      | `stdio`                     | MCP transport protocol mode (`stdio` or `sse`)                   |
+| `MCP_PORT`           | `8081`                      | Port for the MCP server (used ONLY when `MCP_TRANSPORT=sse`)      |
