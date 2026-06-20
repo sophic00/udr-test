@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,8 +46,16 @@ func TestUDRServerFlow(t *testing.T) {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			dbName := ""
 			if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+				if err := api.ValidateSessionID(sessionID); err != nil {
+					api.WriteProblemDetails(w, http.StatusBadRequest, "Invalid Session ID", err.Error())
+					return
+				}
 				dbName = "udr_session_" + sessionID
 			} else if customDB := r.Header.Get("X-UDR-Database"); customDB != "" {
+				if err := api.ValidateDatabaseName(customDB); err != nil {
+					api.WriteProblemDetails(w, http.StatusBadRequest, "Invalid Database Name", err.Error())
+					return
+				}
 				dbName = customDB
 			}
 
@@ -193,5 +202,119 @@ func TestUDRServerFlow(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("Expected status 404 after deletion, got %d", resp.StatusCode)
+	}
+
+	// 10. Nested JSON Merge Patch - Verify recursive merging and that sibling fields are not lost.
+	// Create a resource with nested objects
+	nestedPath := "/nudr-dr/v1/subscription-data/group-data/5g-vn-groups/groupNested"
+	nestedData := bson.M{
+		"vnGroupData": bson.M{
+			"routingIndicator": "1234",
+			"someOtherField":   "keep-me",
+		},
+		"internalGroupId": "intGroupNested",
+	}
+	bodyBytes, _ = json.Marshal(nestedData)
+	req, _ = http.NewRequest(http.MethodPut, ts.URL+nestedPath, bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("Expected PUT status 204, got %d", resp.StatusCode)
+	}
+
+	// Patch only the nested field "routingIndicator"
+	patchNestedData := bson.M{
+		"vnGroupData": bson.M{
+			"routingIndicator": "5678",
+		},
+	}
+	patchBytes, _ = json.Marshal(patchNestedData)
+	req, _ = http.NewRequest(http.MethodPatch, ts.URL+nestedPath, bytes.NewBuffer(patchBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("Expected PATCH status 204, got %d", resp.StatusCode)
+	}
+
+	// Fetch and verify nested map values
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+nestedPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, _ = client.Do(req)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var getNestedResult bson.M
+	json.Unmarshal(body, &getNestedResult)
+	vnGroupData, hasVn := getNestedResult["vnGroupData"].(map[string]interface{})
+	if !hasVn {
+		t.Fatalf("Expected vnGroupData to exist and be a map, got: %+v", getNestedResult["vnGroupData"])
+	}
+	if vnGroupData["routingIndicator"] != "5678" {
+		t.Errorf("Expected routingIndicator to be '5678', got '%v'", vnGroupData["routingIndicator"])
+	}
+	if vnGroupData["someOtherField"] != "keep-me" {
+		t.Errorf("Sibling field 'someOtherField' was lost! got '%v'", vnGroupData["someOtherField"])
+	}
+
+	// 11. Test database validation and blacklist
+	// Bad session ID (special chars)
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-Session-ID", "invalid;session$db")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected 400 Bad Request for invalid X-Session-ID, got %d", resp.StatusCode)
+	}
+
+	// Blacklisted custom DB name
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+testPath, nil)
+	req.Header.Set("X-UDR-Database", "admin")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected 400 Bad Request for blacklisted X-UDR-Database, got %d", resp.StatusCode)
+	}
+
+	// 12. Test POST (sub-resource creation) and GET collection listing
+	collectionPath := "/nudr-dr/v1/subscription-data/imsi-208950000000001/context-data/ee-subscriptions"
+	subData := bson.M{
+		"eeSubscription": bson.M{
+			"callbackReference": "http://callback-uri",
+		},
+	}
+	bodyBytes, _ = json.Marshal(subData)
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+collectionPath, bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Expected POST status 201, got %d", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	if loc == "" || !strings.HasPrefix(loc, collectionPath+"/") {
+		t.Errorf("Expected Location header starting with '%s/', got '%s'", collectionPath, loc)
+	}
+
+	// Get collection listing
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+collectionPath, nil)
+	req.Header.Set("X-Session-ID", "sessionA")
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected collection GET status 200, got %d", resp.StatusCode)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var listResult []bson.M
+	if err := json.Unmarshal(body, &listResult); err != nil {
+		t.Fatalf("Failed to decode collection list: %v", err)
+	}
+	if len(listResult) != 1 {
+		t.Errorf("Expected 1 item in list, got %d", len(listResult))
+	} else {
+		sub, ok := listResult[0]["eeSubscription"].(map[string]interface{})
+		if !ok || sub["callbackReference"] != "http://callback-uri" {
+			t.Errorf("Unexpected item in collection list: %+v", listResult[0])
+		}
 	}
 }
