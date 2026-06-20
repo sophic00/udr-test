@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
-	"strings"
+	"regexp"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -92,7 +92,7 @@ func (d *Datastore) List(ctx context.Context, prefix string) ([]bson.M, error) {
 	// Query resources where ID starts with prefix
 	filter := bson.M{
 		"_id": bson.M{
-			"$regex": "^" + strings.ReplaceAll(prefix, "/", "\\/"),
+			"$regex": "^" + regexp.QuoteMeta(prefix),
 		},
 	}
 	cursor, err := d.getCollection(ctx).Find(ctx, filter)
