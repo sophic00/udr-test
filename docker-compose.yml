@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: udr-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  udr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: udr-server
+    command: ["/app/udr"]
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_DB=udr
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  mcp-mongo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-mongo-server
+    command: ["/app/mcp-mongo"]
+    ports:
+      - "8081:8081"
+    environment:
+      - MCP_TRANSPORT=sse
+      - PORT=8081
+      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_DB=udr
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
