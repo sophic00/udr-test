@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"udr-test/internal/api"
 	"udr-test/internal/datastore"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -86,6 +87,9 @@ func createSessionDbHandler(db *datastore.Datastore) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
+		if err := api.ValidateSessionID(sessionID); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid session_id: %v", err)), nil
+		}
 
 		sessionDbName := fmt.Sprintf("udr_session_%s", sessionID)
 		log.Printf("[MCP] Creating session database: %s", sessionDbName)
@@ -104,6 +108,9 @@ func seedProfileHandler(db *datastore.Datastore) server.ToolHandlerFunc {
 		sessionID, err := request.RequireString("session_id")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if err := api.ValidateSessionID(sessionID); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid session_id: %v", err)), nil
 		}
 		path, err := request.RequireString("path")
 		if err != nil {
@@ -137,6 +144,9 @@ func deleteSessionDbHandler(db *datastore.Datastore) server.ToolHandlerFunc {
 		sessionID, err := request.RequireString("session_id")
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if err := api.ValidateSessionID(sessionID); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid session_id: %v", err)), nil
 		}
 
 		sessionDbName := fmt.Sprintf("udr_session_%s", sessionID)

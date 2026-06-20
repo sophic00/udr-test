@@ -91,8 +91,16 @@ func databaseRoutingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dbName := ""
 		if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+			if err := api.ValidateSessionID(sessionID); err != nil {
+				api.WriteProblemDetails(w, http.StatusBadRequest, "Invalid Session ID", err.Error())
+				return
+			}
 			dbName = fmt.Sprintf("udr_session_%s", sessionID)
 		} else if customDB := r.Header.Get("X-UDR-Database"); customDB != "" {
+			if err := api.ValidateDatabaseName(customDB); err != nil {
+				api.WriteProblemDetails(w, http.StatusBadRequest, "Invalid Database Name", err.Error())
+				return
+			}
 			dbName = customDB
 		}
 
